@@ -4,7 +4,7 @@ from pricepulse.reporter import write_html
 from pricepulse.fetcher import PriceResult
 import openpyxl
 
-wb = openpyxl.load_workbook('test_output_us/asin_detail_20260811_111615.xlsx', data_only=True, read_only=True)
+wb = openpyxl.load_workbook('test_output_us/asin_detail_20260811_111615_brandfix.xlsx', data_only=True, read_only=True)
 ws = wb.active
 rows_raw = list(ws.iter_rows(values_only=True))
 headers = [str(h) for h in rows_raw[0]]
@@ -22,6 +22,6 @@ results = [PriceResult(
 ) for row in rows_raw[1:]]
 
 ts = time.strftime('%Y%m%d_%H%M%S')
-out = Path(f'test_output_us/test_v1.3.1_{ts}.html')
+out = Path(f'test_output_us/test_v1.3.5_{ts}.html')
 write_html(results, out, title='US-Personal Fans ASIN Analysis', subtitle='2026.5.1 - 7.31')
 print(f'Done: {out}  ({out.stat().st_size // 1024} KB)')

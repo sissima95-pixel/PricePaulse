@@ -1,29 +1,17 @@
-import re, json
+import re, json, sys
 from collections import Counter
 
-html = open(r'test_output_us/test_v1.3.1_20260916_003540.html', encoding='utf-8').read()
+path = sys.argv[1] if len(sys.argv) > 1 else 'test_output_us/test_v1.3.5_20260916_015312.html'
+html = open(path, encoding='utf-8').read()
 m = re.search(r'const rowData=(\[.*?\]);', html, re.DOTALL)
-if m:
-    data = json.loads(m.group(1))
-    brands = [r.get('brand','') for r in data if r.get('brand')]
-    c = Counter(brands)
-    blocklist = {'portable','wireless','mini','neck','smart','solar','outdoor',
-                 'indoor','electric','rechargeable','handheld','cordless',
-                 'desk','wall','travel','home','baby','pet','set','car'}
-    problems = {b: n for b, n in c.items() if b.lower() in blocklist}
-    if problems:
-        print('STILL PROBLEMATIC:', problems)
-    else:
-        print('ALL CLEAN - no descriptive-word brands')
-    print('\nTop 15 brands:')
-    for brand, cnt in c.most_common(15):
-        print(f'  {cnt:4d}  {brand}')
-
-    # Check tier bounds sync
-    m2 = re.search(r'const TIER_BOUNDS=(\{.*?\});', html, re.DOTALL)
-    if m2:
-        tb = json.loads(m2.group(1))
-        print('\nTier bounds (from JS):')
-        for mk, tiers in tb.items():
-            for t in tiers:
-                print(f'  {mk}: {t["name"]} ${t["lo"]:.0f}-${t["hi"]:.0f}')
+data = json.loads(m.group(1))
+ok = [r for r in data if r.get('status') == 'ok' and r.get('price')]
+brands = [r.get('brand') or 'Unknown' for r in ok]
+c = Counter(brands)
+print(f'Priced ASINs: {len(ok)}   Unknown: {c.get("Unknown",0)}   Distinct brands: {len(c)-("Unknown" in c)}')
+print('\nTop 12 brands:')
+for b, n in c.most_common(12):
+    print(f'  {n:4d}  {b}')
+m2 = re.search(r'const TIER_BOUNDS=(\{.*?\});', html, re.DOTALL)
+for mk, tiers in json.loads(m2.group(1)).items():
+    print(f'\nTier bounds {mk}: ' + ' | '.join(f'{t["name"]} ${t["lo"]:.0f}-${t["hi"]:.0f}' for t in tiers))
