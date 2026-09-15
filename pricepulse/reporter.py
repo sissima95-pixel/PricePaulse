@@ -295,8 +295,9 @@ def _render_panel(mk, mrows, active, has_sr, has_pr, has_sv):
             brand_pr[b] = brand_pr.get(b, 0) + 1
 
     # Brand avg price chart (Top 12)
+    # Sort by ASIN count desc; "Unknown" always last regardless of count
     brand_avg = sorted([(b, sum(ps)/len(ps), len(ps)) for b, ps in brand_prices.items()],
-                       key=lambda x: -x[2])[:12]
+                       key=lambda x: (x[0] == "Unknown", -x[2]))[:12]
     max_avg = max((a for _, a, _ in brand_avg), default=1)
     brand_avg_html = '<div class="card"><div class="card-title">Brand Avg Price \u00b7 Top 12</div>'
     for i, (bname, avg, cnt) in enumerate(brand_avg):
@@ -326,7 +327,9 @@ def _render_panel(mk, mrows, active, has_sr, has_pr, has_sv):
         for r in tier_rows:
             b = r.get("brand", "").strip() or "Unknown"
             tier_brands_map.setdefault(b, []).append(r)
-        sorted_tb = sorted(tier_brands_map.items(), key=lambda x: -len(x[1]))[:5]
+        # Top 5 by count; "Unknown" always sorted last
+        sorted_tb = sorted(tier_brands_map.items(),
+                           key=lambda x: (x[0] == "Unknown", -len(x[1])))[:5]
 
         tier_brand_html += f'<div class="card tb-card">'
         tier_brand_html += f'<div class="tb-tier-header">'
@@ -421,12 +424,13 @@ def _render_panel(mk, mrows, active, has_sr, has_pr, has_sv):
     # B. BRAND LANDSCAPE
     dist_insight = ""
     if brand_avg:
-        n_brands = len(brand_counts)
-        top3 = brand_avg[:3]
+        n_brands = len([b for b in brand_counts if b != "Unknown"])
+        known = [x for x in brand_avg if x[0] != "Unknown"] or brand_avg
+        top3 = known[:3]
         top3_names = " + ".join(html_mod.escape(b) for b, _, _ in top3)
         top3_share = sum(c for _, _, c in top3) / total_priced * 100 if total_priced else 0
-        top_brand = brand_avg[0]
-        cheapest_brand = min(brand_avg, key=lambda x: x[1])
+        top_brand = known[0]
+        cheapest_brand = min(known, key=lambda x: x[1])
 
         dist_insight = '<div class="insight-box">'
         dist_insight += '<div class="insight-title">B. BRAND LANDSCAPE / \u54c1\u724c\u683c\u5c40</div>'
@@ -784,7 +788,7 @@ document.querySelectorAll('[id^="bubble-"]').forEach(container=>{{
   const mk=container.id.replace('bubble-','');
   const brandMap={{}};
   rowData.filter(r=>r.market===mk&&r.brand).forEach(r=>{{brandMap[r.brand]=(brandMap[r.brand]||0)+1;}});
-  const sorted=Object.entries(brandMap).sort((a,b)=>b[1]-a[1]).slice(0,20);
+  const sorted=Object.entries(brandMap).sort((a,b)=>(a[0]==='Unknown')-(b[0]==='Unknown')||b[1]-a[1]).slice(0,20);
   let html='';
   sorted.forEach(([brand,cnt],i)=>{{
     const color=COLORS[i%10];
@@ -797,12 +801,14 @@ document.querySelectorAll('[id^="bubble-"]').forEach(container=>{{
 function drawDonut(canvasId, dataMap, title){{
   const canvas=document.getElementById(canvasId);
   if(!canvas)return;
-  const entries=Object.entries(dataMap).filter(e=>e[1]>0).sort((a,b)=>b[1]-a[1]);
+  // Unknown is folded into OTHERS rather than shown as a named slice
+  const unknownVal=dataMap['Unknown']||0;
+  const entries=Object.entries(dataMap).filter(e=>e[1]>0&&e[0]!=='Unknown').sort((a,b)=>b[1]-a[1]);
   if(!entries.length)return;
-  const total=entries.reduce((s,e)=>s+e[1],0);
-  // Top 10 + Others
+  const total=entries.reduce((s,e)=>s+e[1],0)+unknownVal;
+  // Top 10 + Others (Others includes Unknown)
   let items=entries.slice(0,10);
-  const othersVal=entries.slice(10).reduce((s,e)=>s+e[1],0);
+  const othersVal=entries.slice(10).reduce((s,e)=>s+e[1],0)+unknownVal;
   if(othersVal>0)items.push(['OTHERS',othersVal]);
 
   const ctx=canvas.getContext('2d');

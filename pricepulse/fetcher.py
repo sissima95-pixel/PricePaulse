@@ -208,6 +208,13 @@ _BRAND_ANCHOR = re.compile(
 # JSON payload sometimes contains "brand":"X"
 _BRAND_JSON = re.compile(r'"brand"\s*:\s*"([^"]+)"')
 # Product-detail table row: "Brand: XXX" or table cell after Brand label
+# Product-overview table row: <tr class="... po-brand"> ... <span class="a-size-base po-break-word">X</span>
+# Most reliable source observed (hit 6/6 in Personal Fan audit, 2026-09)
+_BRAND_PO = re.compile(
+    r'po-brand[\s\S]{0,400}?<span class="a-size-base po-break-word">\s*([^<]+?)\s*</span>', re.S)
+# "Brand Name" row in the technical details table
+_BRAND_NAME_TH = re.compile(
+    r'Brand\s*Name\s*</th>\s*<td[^>]*>\s*([^<]+?)\s*</td>', re.S | re.I)
 _BRAND_TABLE = re.compile(
     r'>\s*(?:Brand|Marka|Marca|Marque|Marke|Merk|\u30d6\u30e9\u30f3\u30c9|'
     r'\u54c1\u724c|\u30e1\u30fc\u30ab\u30fc)\s*'
@@ -307,17 +314,34 @@ def _parse_price(html: str, result: PriceResult) -> None:
     m = _TITLE_PATTERN.search(html)
     if m:
         result.title = _clean(m.group(1))[:200]
-    # Brand extraction — strategy (revised 2026-08-11):
-    #   Primary: byline / storefront (authoritative brand attribution from Amazon)
-    #   Fallback: title first words (only when byline is unavailable)
-    #
-    # Previous title-first approach failed for categories where listings
-    # start with descriptive words (e.g. "Portable Fan", "Wireless Camera").
-    # Byline-first is more reliable across all categories.
+    # Brand extraction — priority order (revised 2026-09-16):
+    #   0. Product-overview table (po-brand)       — most reliable, structured
+    #   0b. "Brand Name" technical-details row     — structured
+    #   1. Byline anchor "Visit the X Store"       — reliable
+    #   2/3. Store URLs                            — DEMOTED: can match sponsored
+    #        brand-store links on the page (e.g. 3 unrelated fans all showed
+    #        /stores/LivechillStaycool/), so only used after structured sources
+    #   4. Product-detail table / 5. JSON payload
+    #   6. Title first word                        — last resort only
     brand = ""
 
+    # 0. Product-overview table row (po-brand)
+    m = _BRAND_PO.search(html)
+    if m:
+        b = _clean(m.group(1))
+        if b and len(b) < 60:
+            brand = b
+
+    # 0b. "Brand Name" technical-details row
+    if not brand:
+        m = _BRAND_NAME_TH.search(html)
+        if m:
+            b = _clean(m.group(1))
+            if b and len(b) < 60:
+                brand = b
+
     # 1. Byline anchor text ("Visit the X Store")
-    m = _BRAND_ANCHOR.search(html)
+    m = _BRAND_ANCHOR.search(html) if not brand else None
     if m:
         b = _clean(m.group(1))
         b = re.sub(
@@ -477,14 +501,35 @@ def fetch_batch(
             r.volume_series = item.get("volume_series")
             return r
 
+        market_results: list[PriceResult] = []
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             futures = {ex.submit(_one, it): it["asin"] for it in normalized}
             for fut in as_completed(futures):
                 r = fut.result()
-                all_results.append(r)
+                market_results.append(r)
                 done[0] += 1
                 if progress_callback:
                     progress_callback(done[0], total, market, r.asin)
+
+        # Second pass: retry brand extraction for OK results with empty brand.
+        # A single sequential retry with a longer pause — page variants
+        # (A/B layouts, throttled partial renders) often resolve on re-fetch.
+        missing = [r for r in market_results if r.status == "ok" and not r.brand]
+        if missing:
+            log.info("[%s] retrying brand for %d ASINs", market, len(missing))
+            for r in missing:
+                time.sleep(max(delay_between, 0.8))
+                try:
+                    r2 = session.fetch(r.asin)
+                    if r2.brand:
+                        r.brand = r2.brand
+                    if r2.price is not None and r.price is None:
+                        r.price = r2.price
+                        r.display_price = r2.display_price or r.display_price
+                except Exception as e:  # noqa: BLE001
+                    log.debug("[%s] brand retry failed for %s: %s", market, r.asin, e)
+
+        all_results.extend(market_results)
 
     return all_results
 
