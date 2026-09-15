@@ -252,12 +252,22 @@ def _render_panel(mk, mrows, active, has_sr, has_pr, has_sv):
     for label, count, lo, hi in bands:
         tier_bounds.append({"name": label, "lo": lo, "hi": hi})
 
-    # Tier cards
+    # --- Helper: which tier does a price belong to ---
+    def _get_tier(p):
+        for i, (lbl, _, lo, hi) in enumerate(bands):
+            if i == len(bands) - 1:
+                if p >= lo:
+                    return lbl
+            else:
+                if lo <= p < hi:
+                    return lbl
+        return bands[-1][0] if bands else ""
+
+    # --- Tier cards ---
     tier_cards = ""
     for i, (label, count, lo, hi) in enumerate(bands):
         pct = f"{count/total_priced*100:.0f}" if total_priced else "0"
-        tier_prices = [r["price"] for r in ok_rows
-                       if (r["price"] >= lo and (r["price"] <= hi if i == 2 else r["price"] < hi))]
+        tier_prices = [r["price"] for r in ok_rows if _get_tier(r["price"]) == label]
         avg_p = sum(tier_prices) / len(tier_prices) if tier_prices else 0
         range_str = f"${lo:.0f}\u2013${hi:.0f}" if i < 2 else f"${lo:.0f}+"
         tier_cards += f'''
@@ -268,27 +278,72 @@ def _render_panel(mk, mrows, active, has_sr, has_pr, has_sv):
           <div class="tier-avg">Avg ${avg_p:.2f}</div>
         </div>'''
 
-    # Brand avg price chart
-    brand_data: dict[str, list[float]] = {}
+    # --- Brand data ---
+    brand_counts: dict[str, int] = {}
+    brand_prices: dict[str, list[float]] = {}
+    brand_sv: dict[str, float] = {}  # total search volume
+    brand_pr: dict[str, float] = {}  # total purchase rank (lower = better, we use count of ASINs)
     for r in ok_rows:
         b = r.get("brand", "").strip() or "Unknown"
-        brand_data.setdefault(b, []).append(r["price"])
-    brand_avg = sorted([(b, sum(ps)/len(ps), len(ps)) for b, ps in brand_data.items()],
+        brand_counts[b] = brand_counts.get(b, 0) + 1
+        brand_prices.setdefault(b, []).append(r["price"])
+        sv = r.get("search_volume") or 0
+        brand_sv[b] = brand_sv.get(b, 0) + sv
+        # Purchase rank: count ASINs with purchase_rank (as proxy for purchase share)
+        pr = r.get("purchase_rank")
+        if pr is not None:
+            brand_pr[b] = brand_pr.get(b, 0) + 1
+
+    # Brand avg price chart (Top 12)
+    brand_avg = sorted([(b, sum(ps)/len(ps), len(ps)) for b, ps in brand_prices.items()],
                        key=lambda x: -x[2])[:12]
     max_avg = max((a for _, a, _ in brand_avg), default=1)
-    brand_html = '<div class="card"><div class="card-title">\U0001f3f7 Brand Avg Price \u00b7 Top 12</div>'
+    brand_avg_html = '<div class="card"><div class="card-title">Brand Avg Price \u00b7 Top 12</div>'
     for i, (bname, avg, cnt) in enumerate(brand_avg):
         pct = avg / max_avg * 100
         color = _CHART_COLORS[i % len(_CHART_COLORS)]
-        brand_html += f'''<div class="hbar-row clickable-bar" data-filter-type="brand" data-filter-value="{html_mod.escape(bname)}" data-market="{mk}">
+        brand_avg_html += f'''<div class="hbar-row clickable-bar" data-filter-type="brand" data-filter-value="{html_mod.escape(bname)}" data-market="{mk}">
           <div class="hbar-label">{html_mod.escape(bname)}</div>
           <div class="hbar-track"><div class="hbar-fill" style="width:{pct:.1f}%;background:{color}"></div></div>
           <div class="hbar-val">${avg:.0f} <span class="hbar-cnt">({cnt})</span></div>
         </div>'''
-    brand_html += '</div>'
+    brand_avg_html += '</div>'
 
-    # --- Generate insights ---
-    # Price tier insight
+    # --- Brand Share donut charts (JS-rendered) ---
+    # We pass brand_sv and brand_pr as JSON for JS to render donuts
+    # Placeholder divs
+    donut_html = ""
+    if has_sv:
+        donut_html += f'<div class="card"><div class="card-title">BRAND SHARE BY SEARCH VOLUME</div><canvas id="donut-sv-{mk}" height="260"></canvas></div>'
+    donut_html += f'<div class="card"><div class="card-title">BRAND SHARE BY ASIN COUNT</div><canvas id="donut-cnt-{mk}" height="260"></canvas></div>'
+
+    # --- Brand Share by Price Tier (collapsible) ---
+    tier_brand_html = '<div class="card">'
+    for i, (label, count, lo, hi) in enumerate(bands):
+        range_str = f"${lo:.0f}\u2013${hi:.0f}" if i < 2 else f"${lo:.0f}+"
+        tier_brand_html += f'<div class="tier-brand-section">'
+        tier_brand_html += f'<div class="tier-brand-header" style="border-left:4px solid {_TIER_COLORS[i]}">'
+        tier_brand_html += f'<span class="tier-badge" style="background:{_TIER_BG[i]};color:{_TIER_TEXT[i]}">{label}</span> {range_str}'
+        tier_brand_html += f'</div>'
+        # Brands in this tier
+        tier_rows = [r for r in ok_rows if _get_tier(r["price"]) == label]
+        tier_brands: dict[str, list] = {}
+        for r in tier_rows:
+            b = r.get("brand", "").strip() or "Unknown"
+            tier_brands.setdefault(b, []).append(r)
+        sorted_tb = sorted(tier_brands.items(), key=lambda x: -len(x[1]))
+        for bname, basins in sorted_tb:
+            asin_list = ", ".join(r.get("asin", "") for r in basins[:10])
+            extra = f" +{len(basins)-10} more" if len(basins) > 10 else ""
+            tier_brand_html += f'<details class="tier-brand-detail">'
+            tier_brand_html += f'<summary><span class="tb-brand">{html_mod.escape(bname)}</span> <span class="tb-count">{len(basins)}</span></summary>'
+            tier_brand_html += f'<div class="tb-asins">{html_mod.escape(asin_list)}{extra}</div>'
+            tier_brand_html += f'</details>'
+        tier_brand_html += '</div>'
+    tier_brand_html += '</div>'
+
+    # --- INSIGHTS (professional format: EN + CN italic) ---
+    # A. PRICE OVERVIEW
     tier_insight = ""
     if bands and total_priced:
         sorted_bands = sorted(bands, key=lambda x: -x[1])
@@ -296,87 +351,109 @@ def _render_panel(mk, mrows, active, has_sr, has_pr, has_sv):
         dom_pct = dominant[1] / total_priced * 100
         smallest = sorted_bands[-1]
         sm_pct = smallest[1] / total_priced * 100
-
         avg_price = sum(prices) / len(prices)
         median_price = sorted(prices)[len(prices) // 2]
 
-        tier_insight = f'<div class="insight-box">'
-        tier_insight += f'<div class="insight-title">\U0001f4a1 Insight</div>'
-        tier_insight += f'<p>This category spans <b>${min(prices):.0f} \u2013 ${max(prices):.0f}</b> ({cur}), '
-        tier_insight += f'with a median of <b>${median_price:.0f}</b> and mean of <b>${avg_price:.0f}</b>. '
-        tier_insight += f'The <b>{dominant[0]}</b> tier dominates with <b>{dominant[1]}</b> ASINs ({dom_pct:.0f}%), '
-        tier_insight += f'while <b>{smallest[0]}</b> has the fewest at <b>{smallest[1]}</b> ({sm_pct:.0f}%).'
-
-        # Price concentration check
+        tier_insight = '<div class="insight-box">'
+        tier_insight += '<div class="insight-title">A. PRICE OVERVIEW / \u4ef7\u683c\u6982\u89c8</div>'
+        # EN
+        tier_insight += f'<p>Price range spans <b>${min(prices):.0f}\u2013${max(prices):.0f}</b> ({cur}) '
+        tier_insight += f'with median <b>${median_price:.0f}</b> and mean <b>${avg_price:.0f}</b>. '
+        tier_insight += f'The <b>{dominant[0]}</b> tier dominates at <b>{dom_pct:.0f}%</b> of ASINs ({dominant[1]}), '
+        tier_insight += f'while <b>{smallest[0]}</b> holds <b>{sm_pct:.0f}%</b> ({smallest[1]}).'
         if dom_pct > 50:
-            tier_insight += f' The market is heavily concentrated in the {dominant[0]} segment \u2014 '
-            tier_insight += f'a potential opportunity exists in the {smallest[0]} tier with less competition.'
-
+            tier_insight += f' Heavy concentration in the {dominant[0]} segment suggests '
+            tier_insight += f'potential whitespace in the {smallest[0]} tier.'
         tier_insight += '</p>'
-        tier_insight += f'<div class="insight-note">\u2139\ufe0f Price tiers are split by tercile (33rd/67th percentile) '
-        tier_insight += f'to ensure balanced distribution across segments. Boundaries are rounded for readability.</div>'
+        # CN
+        tier_insight += f'<p class="cn">\u4ef7\u683c\u8303\u56f4${min(prices):.0f}\u2013${max(prices):.0f}({cur})\uff0c'
+        tier_insight += f'\u4e2d\u4f4d\u6570${median_price:.0f}\uff0c\u5747\u4ef7${avg_price:.0f}\u3002'
+        tier_insight += f'{dominant[0]}\u6863\u4f4d\u5360\u6bd4{dom_pct:.0f}%({dominant[1]}\u4e2aASIN)\uff0c'
+        tier_insight += f'{smallest[0]}\u6863\u4f4d\u4ec5{sm_pct:.0f}%({smallest[1]}\u4e2a)\u3002'
+        if dom_pct > 50:
+            tier_insight += f'\u5e02\u573a\u91cd\u5ea6\u96c6\u4e2d\u5728{dominant[0]}\u6bb5\uff0c'
+            tier_insight += f'{smallest[0]}\u6bb5\u5b58\u5728\u5dee\u5f02\u5316\u7a7a\u95f4\u3002'
+        tier_insight += '</p>'
+        # Banding note
+        tier_insight += '<div class="insight-note">Price tiers split by tercile (33rd/67th percentile) '
+        tier_insight += 'for balanced distribution. Boundaries rounded for readability.</div>'
         tier_insight += '</div>'
 
-    # Distribution insight (brand)
+    # B. BRAND LANDSCAPE
     dist_insight = ""
     if brand_avg:
+        n_brands = len(brand_counts)
+        top3 = brand_avg[:3]
+        top3_names = " + ".join(html_mod.escape(b) for b, _, _ in top3)
+        top3_share = sum(c for _, _, c in top3) / total_priced * 100 if total_priced else 0
         top_brand = brand_avg[0]
         cheapest_brand = min(brand_avg, key=lambda x: x[1])
-        n_brands = len(brand_data)
-        top3_share = sum(c for _, _, c in brand_avg[:3]) / total_priced * 100 if total_priced else 0
 
-        dist_insight = f'<div class="insight-box">'
-        dist_insight += f'<div class="insight-title">\U0001f4a1 Insight</div>'
-        dist_insight += f'<p><b>{n_brands}</b> brands compete in this category. '
-        dist_insight += f'<b>{html_mod.escape(top_brand[0])}</b> has the highest average price at <b>${top_brand[1]:.0f}</b>, '
-        dist_insight += f'while <b>{html_mod.escape(cheapest_brand[0])}</b> is the most affordable at <b>${cheapest_brand[1]:.0f}</b>. '
-        dist_insight += f'Top 3 brands account for <b>{top3_share:.0f}%</b> of all priced ASINs.'
-
-        # Concentration check
+        dist_insight = '<div class="insight-box">'
+        dist_insight += '<div class="insight-title">B. BRAND LANDSCAPE / \u54c1\u724c\u683c\u5c40</div>'
+        # EN
+        dist_insight += f'<p><b>{n_brands}</b> active brands. '
+        dist_insight += f'Top 3 ({top3_names}) account for <b>{top3_share:.0f}%</b> of ASINs. '
+        dist_insight += f'<b>{html_mod.escape(top_brand[0])}</b> leads with <b>{top_brand[2]}</b> ASINs '
+        dist_insight += f'at avg <b>${top_brand[1]:.0f}</b>. '
+        dist_insight += f'Most affordable brand: <b>{html_mod.escape(cheapest_brand[0])}</b> at avg <b>${cheapest_brand[1]:.0f}</b>.'
         if top3_share > 40:
-            dist_insight += f' The market shows moderate-to-high brand concentration.'
+            dist_insight += ' Moderate-to-high brand concentration.'
         elif top3_share < 20:
-            dist_insight += f' The market is highly fragmented with no dominant player.'
-
+            dist_insight += ' Highly fragmented market with no dominant player.'
+        dist_insight += '</p>'
+        # CN
+        dist_insight += f'<p class="cn">{n_brands}\u4e2a\u6d3b\u8dc3\u54c1\u724c\u3002'
+        dist_insight += f'\u524d\u4e09({top3_names})\u5408\u8ba1\u5360{top3_share:.0f}%\u3002'
+        dist_insight += f'{html_mod.escape(top_brand[0])}\u4ee5{top_brand[2]}\u4e2aASIN\u9886\u5148\uff0c'
+        dist_insight += f'\u5747\u4ef7${top_brand[1]:.0f}\u3002'
+        dist_insight += f'\u6700\u4f4e\u4ef7\u54c1\u724c:{html_mod.escape(cheapest_brand[0])}\uff0c\u5747\u4ef7${cheapest_brand[1]:.0f}\u3002'
         dist_insight += '</p></div>'
 
-    # Volume chart placeholder
+    # --- Volume chart placeholder ---
     vol_html = ""
     if has_sv:
         vol_html = f'''<div class="section">
-          <div class="section-title">\U0001f4ca Search Volume by ASIN (Top 15) <span class="vol-filter-label" id="vol-filter-{mk}"></span></div>
-          <div class="table-actions"><button class="action-btn" onclick="copyVolAsins('{mk}')" title="Copy ASINs">\U0001f4cb Copy ASINs</button></div>
+          <div class="section-title">5. Search Volume by ASIN (Top 15) <span class="vol-filter-label" id="vol-filter-{mk}"></span></div>
+          <div class="table-actions"><button class="action-btn" onclick="copyVolAsins('{mk}')" title="Copy ASINs">Copy ASINs</button></div>
           <div class="card"><div id="vol-chart-{mk}"></div></div>
         </div>'''
 
-    # Table
+    # --- Table ---
     table_html = _render_table(mk, mrows, has_sr, has_pr)
 
     panel_str = f'''
     <div class="tab-content{" active" if active else ""}" data-market="{mk}" style="display:{display}">
       <div class="section">
-        <div class="section-title">\U0001f3c6 Price Tier Overview</div>
+        <div class="section-title">1. Price Tier Overview</div>
         <div class="tier-row">{tier_cards}</div>
         {tier_insight}
       </div>
       <div class="section">
-        <div class="section-title">\U0001f4c8 Distribution</div>
+        <div class="section-title">2. Distribution</div>
         <div class="grid-2">
-          <div class="card tier-chart-card"><div class="card-title">\U0001f4ca ASIN Count by Price Tier</div><div id="tier-svg-{mk}" class="tier-svg-wrap"></div></div>
-          {brand_html}
+          <div class="card tier-chart-card"><div class="card-title">ASIN COUNT BY PRICE TIER</div><div id="tier-svg-{mk}" class="tier-svg-wrap"></div></div>
+          {brand_avg_html}
         </div>
+      </div>
+      <div class="section">
+        <div class="section-title">3. Brand Share</div>
+        <div class="grid-2">
+          {donut_html}
+        </div>
+        <div class="card"><div class="bubble-cloud" id="bubble-{mk}"></div></div>
         {dist_insight}
       </div>
       <div class="section">
-        <div class="section-title">\U0001f3af Brand Overview</div>
-        <div class="card"><div class="bubble-cloud" id="bubble-{mk}"></div></div>
+        <div class="section-title">4. Brand Share by Price Tier</div>
+        {tier_brand_html}
       </div>
       {vol_html}
       <div class="section">
-        <div class="section-title">\U0001f4cb ASIN Detail</div>
+        <div class="section-title">6. ASIN Detail</div>
         <div class="table-actions">
-          <button class="action-btn" onclick="copyAsins('{mk}')" title="Copy ASINs">\U0001f4cb Copy ASINs</button>
-          <button class="action-btn" onclick="exportExcel('{mk}')" title="Export Excel">\u2B07 Export Excel</button>
+          <button class="action-btn" onclick="copyAsins('{mk}')" title="Copy ASINs">Copy ASINs</button>
+          <button class="action-btn" onclick="exportExcel('{mk}')" title="Export Excel">Export Excel</button>
         </div>
         {table_html}
       </div>
@@ -526,11 +603,22 @@ tbody tr:hover td{{background:var(--primary-50);}}
 .fp-clear:hover{{background:var(--neutral-200);}}
 .fp-selectall{{font-weight:700;padding-bottom:4px;border-bottom:1px solid var(--neutral-100);margin-bottom:4px;}}
 /* Insight box */
-.insight-box{{background:var(--primary-50);border:1px solid #c7d2fe;border-radius:var(--radius-lg);padding:16px 20px;margin-top:16px;}}
-.insight-title{{font-size:13px;font-weight:700;color:var(--primary-700);margin-bottom:8px;}}
-.insight-box p{{font-size:12.5px;color:var(--neutral-700);line-height:1.65;}}
+.insight-box{{background:#f8fafc;border:1px solid var(--neutral-200);border-radius:var(--radius-lg);padding:18px 22px;margin-top:18px;}}
+.insight-title{{font-size:13px;font-weight:700;color:var(--neutral-800);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--neutral-200);}}
+.insight-box p{{font-size:12.5px;color:var(--neutral-700);line-height:1.7;margin-bottom:10px;}}
+.insight-box p.cn{{font-style:italic;color:var(--neutral-500);font-size:12px;margin-bottom:8px;}}
 .insight-box b{{color:var(--neutral-900);}}
-.insight-note{{font-size:11px;color:var(--neutral-500);margin-top:10px;font-style:italic;padding-top:8px;border-top:1px solid #c7d2fe;}}
+.insight-note{{font-size:11px;color:var(--neutral-400);margin-top:10px;font-style:italic;padding-top:8px;border-top:1px solid var(--neutral-200);}}
+
+/* Tier-brand collapsible */
+.tier-brand-section{{margin-bottom:12px;}}
+.tier-brand-header{{padding:10px 14px;font-size:13px;font-weight:600;color:var(--neutral-800);margin-bottom:4px;}}
+.tier-brand-detail{{margin-left:20px;}}
+.tier-brand-detail summary{{padding:6px 10px;font-size:12px;cursor:pointer;border-radius:6px;transition:background .15s;}}
+.tier-brand-detail summary:hover{{background:var(--neutral-100);}}
+.tb-brand{{font-weight:600;color:var(--neutral-800);}}
+.tb-count{{font-size:11px;color:var(--neutral-400);margin-left:4px;}}
+.tb-asins{{padding:6px 10px 10px 10px;font-family:'SF Mono',Monaco,Consolas,monospace;font-size:11px;color:var(--neutral-500);line-height:1.6;}}
 
 canvas{{width:100%!important;}}
 
@@ -655,6 +743,68 @@ document.querySelectorAll('[id^="bubble-"]').forEach(container=>{{
     html+='<span class="bubble clickable-bar" data-filter-type="brand" data-filter-value="'+brand.replace(/"/g,'&quot;')+'" data-market="'+mk+'" style="background:'+color+'">'+brand+' <b>'+cnt+'</b></span>';
   }});
   container.innerHTML=html;
+}});
+
+// Donut charts
+function drawDonut(canvasId, dataMap, title){{
+  const canvas=document.getElementById(canvasId);
+  if(!canvas)return;
+  const entries=Object.entries(dataMap).filter(e=>e[1]>0).sort((a,b)=>b[1]-a[1]);
+  if(!entries.length)return;
+  const total=entries.reduce((s,e)=>s+e[1],0);
+  // Top 10 + Others
+  let items=entries.slice(0,10);
+  const othersVal=entries.slice(10).reduce((s,e)=>s+e[1],0);
+  if(othersVal>0)items.push(['OTHERS',othersVal]);
+
+  const ctx=canvas.getContext('2d');
+  const W=canvas.offsetWidth||350,H=260;
+  canvas.width=W;canvas.height=H;
+  const cx=W*0.38,cy=H/2,R=Math.min(cx-10,cy-10),r=R*0.55;
+  let angle=-Math.PI/2;
+
+  items.forEach((item,i)=>{{
+    const slice=item[1]/total*Math.PI*2;
+    const color=i<10?COLORS[i%10]:'#d4d4d4';
+    ctx.beginPath();ctx.moveTo(cx,cy);
+    ctx.arc(cx,cy,R,angle,angle+slice);ctx.closePath();
+    ctx.fillStyle=color;ctx.fill();
+    angle+=slice;
+  }});
+  // Inner circle (donut hole)
+  ctx.beginPath();ctx.arc(cx,cy,r,0,Math.PI*2);
+  ctx.fillStyle='#ffffff';ctx.fill();
+
+  // Legend on right
+  const legX=cx+R+20,legY=20;
+  ctx.font='11px Inter,sans-serif';
+  items.forEach((item,i)=>{{
+    const y=legY+i*20;
+    const pct=(item[1]/total*100).toFixed(1);
+    const color=i<10?COLORS[i%10]:'#d4d4d4';
+    ctx.fillStyle=color;
+    ctx.beginPath();ctx.arc(legX,y+5,5,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='#404040';ctx.font='600 11px Inter';
+    ctx.fillText(item[0]+' ('+pct+'%)',legX+12,y+9);
+  }});
+}}
+
+// Render donut charts per market
+document.querySelectorAll('[id^="donut-sv-"]').forEach(c=>{{
+  const mk=c.id.replace('donut-sv-','');
+  const brandSV={{}};
+  rowData.filter(r=>r.market===mk&&r.search_volume&&r.brand).forEach(r=>{{
+    brandSV[r.brand]=(brandSV[r.brand]||0)+r.search_volume;
+  }});
+  drawDonut(c.id,brandSV);
+}});
+document.querySelectorAll('[id^="donut-cnt-"]').forEach(c=>{{
+  const mk=c.id.replace('donut-cnt-','');
+  const brandCnt={{}};
+  rowData.filter(r=>r.market===mk&&r.price&&r.brand).forEach(r=>{{
+    brandCnt[r.brand]=(brandCnt[r.brand]||0)+1;
+  }});
+  drawDonut(c.id,brandCnt);
 }});
 
 // Click interaction
