@@ -317,30 +317,69 @@ def _render_panel(mk, mrows, active, has_sr, has_pr, has_sv):
         donut_html += f'<div class="card"><div class="card-title">BRAND SHARE BY SEARCH VOLUME</div><canvas id="donut-sv-{mk}" height="260"></canvas></div>'
     donut_html += f'<div class="card"><div class="card-title">BRAND SHARE BY ASIN COUNT</div><canvas id="donut-cnt-{mk}" height="260"></canvas></div>'
 
-    # --- Brand Share by Price Tier (collapsible) ---
-    tier_brand_html = '<div class="card">'
+    # --- Brand Share by Price Tier (Top 5 per tier, table-style, collapsible) ---
+    tier_brand_html = ''
     for i, (label, count, lo, hi) in enumerate(bands):
         range_str = f"${lo:.0f}\u2013${hi:.0f}" if i < 2 else f"${lo:.0f}+"
-        tier_brand_html += f'<div class="tier-brand-section">'
-        tier_brand_html += f'<div class="tier-brand-header" style="border-left:4px solid {_TIER_COLORS[i]}">'
-        tier_brand_html += f'<span class="tier-badge" style="background:{_TIER_BG[i]};color:{_TIER_TEXT[i]}">{label}</span> {range_str}'
-        tier_brand_html += f'</div>'
-        # Brands in this tier
         tier_rows = [r for r in ok_rows if _get_tier(r["price"]) == label]
-        tier_brands: dict[str, list] = {}
+        tier_brands_map: dict[str, list] = {}
         for r in tier_rows:
             b = r.get("brand", "").strip() or "Unknown"
-            tier_brands.setdefault(b, []).append(r)
-        sorted_tb = sorted(tier_brands.items(), key=lambda x: -len(x[1]))
-        for bname, basins in sorted_tb:
-            asin_list = ", ".join(r.get("asin", "") for r in basins[:10])
-            extra = f" +{len(basins)-10} more" if len(basins) > 10 else ""
-            tier_brand_html += f'<details class="tier-brand-detail">'
-            tier_brand_html += f'<summary><span class="tb-brand">{html_mod.escape(bname)}</span> <span class="tb-count">{len(basins)}</span></summary>'
-            tier_brand_html += f'<div class="tb-asins">{html_mod.escape(asin_list)}{extra}</div>'
-            tier_brand_html += f'</details>'
-        tier_brand_html += '</div>'
-    tier_brand_html += '</div>'
+            tier_brands_map.setdefault(b, []).append(r)
+        sorted_tb = sorted(tier_brands_map.items(), key=lambda x: -len(x[1]))[:5]
+
+        tier_brand_html += f'<div class="card tb-card">'
+        tier_brand_html += f'<div class="tb-tier-header">'
+        tier_brand_html += f'<span class="tier-badge" style="background:{_TIER_BG[i]};color:{_TIER_TEXT[i]}">{label}</span>'
+        tier_brand_html += f' {range_str} \u00b7 {len(tier_rows)} ASINs (Top 5)'
+        tier_brand_html += f'</div>'
+
+        # Brand table
+        tier_brand_html += '<table class="tb-table"><thead><tr>'
+        tier_brand_html += '<th style="width:30px"></th><th>Brand</th><th class="num">ASINs</th><th class="num">Share</th>'
+        tier_brand_html += '</tr></thead><tbody>'
+
+        total_in_tier = len(tier_rows)
+        for j, (bname, basins) in enumerate(sorted_tb):
+            color = _CHART_COLORS[j % len(_CHART_COLORS)]
+            share = len(basins) / total_in_tier * 100 if total_in_tier else 0
+            # Build expandable ASIN sub-table
+            asin_subtable = '<table class="tb-asin-table"><thead><tr>'
+            asin_subtable += '<th>ASIN</th><th>Title</th><th>Price</th><th>Status</th>'
+            if has_sr:
+                asin_subtable += '<th>Search Rank</th>'
+            if has_pr:
+                asin_subtable += '<th>Purchase Rank</th>'
+            asin_subtable += '</tr></thead><tbody>'
+            for r in basins:
+                p = r.get("price")
+                price_s = f'${p:.2f}' if p else "\u2014"
+                title_s = html_mod.escape((r.get("title", "") or "")[:70])
+                asin_s = html_mod.escape(r.get("asin", ""))
+                url_s = html_mod.escape(r.get("url", ""))
+                status_s = r.get("status", "")
+                asin_subtable += f'<tr><td><a class="asin-link" href="{url_s}" target="_blank">{asin_s}</a></td>'
+                asin_subtable += f'<td class="cell-title">{title_s}</td>'
+                asin_subtable += f'<td>{price_s}</td>'
+                asin_subtable += f'<td class="st-{status_s}">{status_s}</td>'
+                if has_sr:
+                    sv = r.get("search_rank")
+                    asin_subtable += f'<td>{sv:.0f}</td>' if sv is not None else '<td>\u2014</td>'
+                if has_pr:
+                    pv = r.get("purchase_rank")
+                    asin_subtable += f'<td>{pv:.0f}</td>' if pv is not None else '<td>\u2014</td>'
+                asin_subtable += '</tr>'
+            asin_subtable += '</tbody></table>'
+
+            tier_brand_html += f'<tr class="tb-brand-row">'
+            tier_brand_html += f'<td><span class="color-dot" style="background:{color}"></span></td>'
+            tier_brand_html += f'<td><details class="tb-expand"><summary class="tb-brand-name">{html_mod.escape(bname)}</summary>{asin_subtable}</details></td>'
+            tier_brand_html += f'<td class="num">{len(basins)}</td>'
+            tier_brand_html += f'<td class="num"><b>{share:.1f}%</b></td>'
+            tier_brand_html += f'</tr>'
+
+        tier_brand_html += '</tbody></table></div>'
+    # end for each tier
 
     # --- INSIGHTS (professional format: EN + CN italic) ---
     # A. PRICE OVERVIEW
@@ -610,15 +649,24 @@ tbody tr:hover td{{background:var(--primary-50);}}
 .insight-box b{{color:var(--neutral-900);}}
 .insight-note{{font-size:11px;color:var(--neutral-400);margin-top:10px;font-style:italic;padding-top:8px;border-top:1px solid var(--neutral-200);}}
 
-/* Tier-brand collapsible */
-.tier-brand-section{{margin-bottom:12px;}}
-.tier-brand-header{{padding:10px 14px;font-size:13px;font-weight:600;color:var(--neutral-800);margin-bottom:4px;}}
-.tier-brand-detail{{margin-left:20px;}}
-.tier-brand-detail summary{{padding:6px 10px;font-size:12px;cursor:pointer;border-radius:6px;transition:background .15s;}}
-.tier-brand-detail summary:hover{{background:var(--neutral-100);}}
-.tb-brand{{font-weight:600;color:var(--neutral-800);}}
-.tb-count{{font-size:11px;color:var(--neutral-400);margin-left:4px;}}
-.tb-asins{{padding:6px 10px 10px 10px;font-family:'SF Mono',Monaco,Consolas,monospace;font-size:11px;color:var(--neutral-500);line-height:1.6;}}
+/* Tier-brand tables */
+.tb-card{{margin-bottom:16px;}}
+.tb-tier-header{{padding:12px 16px;font-size:14px;font-weight:600;color:var(--neutral-800);border-bottom:1px solid var(--neutral-200);}}
+.tb-table{{width:100%;border-collapse:collapse;margin-top:4px;}}
+.tb-table th{{padding:8px 12px;font-size:11px;font-weight:600;color:var(--neutral-500);text-transform:uppercase;letter-spacing:0.3px;border-bottom:1px solid var(--neutral-200);text-align:left;}}
+.tb-table th.num{{text-align:right;}}
+.tb-table td{{padding:10px 12px;font-size:13px;color:var(--neutral-700);border-bottom:1px solid #f5f5f5;vertical-align:top;}}
+.tb-table td.num{{text-align:right;font-variant-numeric:tabular-nums;}}
+.tb-brand-row:hover td{{background:#f8fafc;}}
+.color-dot{{display:inline-block;width:10px;height:10px;border-radius:50%;vertical-align:middle;}}
+.tb-expand summary{{cursor:pointer;list-style:none;}}
+.tb-expand summary::-webkit-details-marker{{display:none;}}
+.tb-brand-name{{font-weight:600;color:var(--neutral-800);}}
+.tb-brand-name::before{{content:'\u25B6 ';font-size:9px;color:var(--neutral-400);transition:transform .2s;}}
+.tb-expand[open] .tb-brand-name::before{{content:'\u25BC ';}}
+.tb-asin-table{{width:100%;border-collapse:collapse;margin-top:8px;margin-bottom:4px;background:#fafafa;border-radius:8px;overflow:hidden;}}
+.tb-asin-table th{{padding:6px 10px;font-size:10px;font-weight:600;color:var(--neutral-500);text-transform:uppercase;background:#f1f5f9;border-bottom:1px solid var(--neutral-200);text-align:left;}}
+.tb-asin-table td{{padding:6px 10px;font-size:12px;color:var(--neutral-600);border-bottom:1px solid #f0f0f0;}}
 
 canvas{{width:100%!important;}}
 
