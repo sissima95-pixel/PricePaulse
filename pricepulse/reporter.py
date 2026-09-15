@@ -123,6 +123,26 @@ def write_html(results: list, path, title: str = "ASIN Price Intelligence Report
         path.write_text("<!DOCTYPE html><html><body><p>No results</p></body></html>", encoding="utf-8")
         return
     rows = [asdict(r) if not isinstance(r, dict) else r for r in results]
+
+    # Post-process: clear brands that are actually descriptive words (not real brands)
+    _desc_words = {
+        "portable", "wireless", "mini", "smart", "solar", "outdoor",
+        "indoor", "electric", "digital", "automatic", "universal",
+        "rechargeable", "bluetooth", "waterproof", "adjustable",
+        "foldable", "handheld", "cordless", "stainless", "heavy",
+        "professional", "personal", "upgraded", "advanced", "ultra",
+        "super", "extra", "large", "small", "big", "slim", "compact",
+        "powerful", "quiet", "silent", "fast", "quick", "high", "low",
+        "dual", "double", "single", "multi",
+        "neck", "desk", "wall", "floor", "table", "car", "bed",
+        "baby", "pet", "dog", "cat", "kids", "home", "kitchen",
+        "garden", "office", "camping", "travel", "sport", "gym",
+        "set", "kit", "pair", "usb", "led", "lcd", "hd", "wifi",
+    }
+    for r in rows:
+        b = (r.get("brand") or "").strip()
+        if b.lower() in _desc_words:
+            r["brand"] = ""
     has_sr = any(r.get("search_rank") is not None for r in rows)
     has_pr = any(r.get("purchase_rank") is not None for r in rows)
     has_sv = any(r.get("search_volume") is not None for r in rows)
@@ -134,11 +154,14 @@ def write_html(results: list, path, title: str = "ASIN Price Intelligence Report
 
     panels_html = ""
     tabs_html = ""
+    tier_bounds_map: dict[str, list] = {}  # market -> [[lo,hi], [lo,hi], [lo,hi]]
     first = True
     for mk, mrows in markets_data.items():
         active = " active" if first else ""
         tabs_html += f'<div class="tab{active}" data-market="{mk}">{mk} ({len(mrows)})</div>\n'
-        panels_html += _render_panel(mk, mrows, active, has_sr, has_pr, has_sv)
+        panel_html, tier_bounds = _render_panel(mk, mrows, active, has_sr, has_pr, has_sv)
+        panels_html += panel_html
+        tier_bounds_map[mk] = tier_bounds
         first = False
 
     json_rows = [{k: v for k, v in r.items() if k != "volume_series"} for r in rows]
@@ -150,33 +173,84 @@ def write_html(results: list, path, title: str = "ASIN Price Intelligence Report
                 vol_json[r["asin"]] = vs
 
     html = _full_html(html_mod.escape(title), html_mod.escape(subtitle) if subtitle else "",
-                      tabs_html, panels_html, json_rows, vol_json, has_sr, has_pr, has_sv, has_vs)
+                      tabs_html, panels_html, json_rows, vol_json, tier_bounds_map,
+                      has_sr, has_pr, has_sv, has_vs)
     path.write_text(html, encoding="utf-8")
 
 
 def _price_bands(prices: list[float]) -> list[tuple[str, int, float, float]]:
-    """Returns [(label, count, lo, hi), ...]"""
+    """Smart 3-tier price banding using tercile (33rd/67th percentile) splits.
+
+    This ensures each tier has a roughly balanced number of ASINs,
+    making the segmentation meaningful regardless of distribution skew.
+    Boundaries are rounded to "nice" numbers for readability.
+    Returns [(label, count, lo, hi), ...]
+    """
     if not prices:
         return []
-    mn, mx = min(prices), max(prices)
-    step = (mx - mn) / 3 if mx > mn else max(mx * 0.1, 1)
-    bounds = [mn, mn + step, mn + step * 2, mx]
+    sorted_p = sorted(prices)
+    n = len(sorted_p)
+    mn, mx = sorted_p[0], sorted_p[-1]
+
+    if mx - mn < 1:
+        # All same price — single tier
+        return [("Entry", n, mn, mx)]
+
+    # Tercile boundaries (33rd and 67th percentile)
+    b1_raw = sorted_p[n // 3]
+    b2_raw = sorted_p[2 * n // 3]
+
+    # Round to "nice" numbers for readability
+    def _nice(v):
+        if v <= 10:
+            return round(v)
+        elif v <= 100:
+            return round(v / 5) * 5       # round to nearest 5
+        elif v <= 500:
+            return round(v / 10) * 10      # round to nearest 10
+        else:
+            return round(v / 50) * 50      # round to nearest 50
+
+    b1 = _nice(b1_raw)
+    b2 = _nice(b2_raw)
+    # Ensure boundaries are distinct and ordered
+    if b1 <= mn:
+        b1 = _nice(mn + (mx - mn) * 0.33)
+    if b2 <= b1:
+        b2 = _nice(b1 + (mx - b1) * 0.5)
+    if b2 >= mx:
+        b2 = _nice(mn + (mx - mn) * 0.67)
+    if b1 >= b2:
+        # Fallback: equal-width
+        step = (mx - mn) / 3
+        b1 = _nice(mn + step)
+        b2 = _nice(mn + step * 2)
+
     labels = ["Entry", "Mid-tier", "Premium"]
+    bounds = [(0, b1), (b1, b2), (b2, float('inf'))]
     bands = []
-    for i in range(3):
-        lo, hi = bounds[i], bounds[i + 1]
-        count = sum(1 for p in prices if (lo <= p <= hi if i == 2 else lo <= p < hi))
-        bands.append((labels[i], count, lo, hi))
+    for i, (lo, hi) in enumerate(bounds):
+        if i == 2:
+            count = sum(1 for p in prices if p >= lo)
+        else:
+            count = sum(1 for p in prices if lo <= p < hi)
+        bands.append((labels[i], count, lo if i == 0 else lo, hi if i < 2 else mx))
     return bands
 
 
 def _render_panel(mk, mrows, active, has_sr, has_pr, has_sv):
+    """Returns (html_string, tier_bounds_list)."""
     ok_rows = [r for r in mrows if r.get("status") == "ok" and r.get("price")]
     prices = [r["price"] for r in ok_rows]
     bands = _price_bands(prices)
     cur = ok_rows[0]["currency"] if ok_rows else ""
     total_priced = sum(c for _, c, _, _ in bands)
     display = "block" if active else "none"
+
+    # Collect tier bounds for JS sync
+    tier_bounds = []
+    for label, count, lo, hi in bands:
+        tier_bounds.append({"name": label, "lo": lo, "hi": hi})
 
     # Tier cards
     tier_cards = ""
@@ -224,7 +298,7 @@ def _render_panel(mk, mrows, active, has_sr, has_pr, has_sv):
     # Table
     table_html = _render_table(mk, mrows, has_sr, has_pr)
 
-    return f'''
+    panel_str = f'''
     <div class="tab-content{" active" if active else ""}" data-market="{mk}" style="display:{display}">
       <div class="section">
         <div class="section-title">\U0001f3c6 Price Tier Overview</div>
@@ -244,9 +318,15 @@ def _render_panel(mk, mrows, active, has_sr, has_pr, has_sv):
       {vol_html}
       <div class="section">
         <div class="section-title">\U0001f4cb ASIN Detail</div>
+        <div class="table-actions">
+          <button class="action-btn" onclick="copyAsins('{mk}')" title="Copy ASINs">\U0001f4cb Copy ASINs</button>
+          <button class="action-btn" onclick="exportExcel('{mk}')" title="Export Excel">\u2B07 Export Excel</button>
+        </div>
         {table_html}
       </div>
     </div>'''
+
+    return (panel_str, tier_bounds)
 
 
 def _render_table(mk, mrows, has_sr, has_pr):
@@ -280,9 +360,10 @@ def _render_table(mk, mrows, has_sr, has_pr):
     return f'''<div class="table-wrap"><table id="table-{mk}"><thead><tr>{th}</tr></thead><tbody>{tbody}</tbody></table></div>'''
 
 
-def _full_html(title, subtitle, tabs_html, panels_html, json_rows, vol_json, has_sr, has_pr, has_sv, has_vs):
+def _full_html(title, subtitle, tabs_html, panels_html, json_rows, vol_json, tier_bounds_map, has_sr, has_pr, has_sv, has_vs):
     row_json = json.dumps(json_rows, ensure_ascii=False, separators=(",", ":"))
     vol_j = json.dumps(vol_json, ensure_ascii=False, separators=(",", ":"))
+    tier_j = json.dumps(tier_bounds_map, ensure_ascii=False, separators=(",", ":"))
 
     return f'''<!DOCTYPE html>
 <html lang="en">
@@ -390,6 +471,14 @@ tbody tr:hover td{{background:var(--primary-50);}}
 .fp-selectall{{font-weight:700;padding-bottom:4px;border-bottom:1px solid var(--neutral-100);margin-bottom:4px;}}
 canvas{{width:100%!important;}}
 
+/* Action buttons */
+.table-actions{{display:flex;gap:8px;margin-bottom:12px;}}
+.action-btn{{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;background:var(--primary-50);border:1px solid #c7d2fe;border-radius:var(--radius-md);font-size:12px;font-weight:600;color:var(--primary-700);cursor:pointer;transition:all .2s cubic-bezier(0.34,1.56,0.64,1);}}
+.action-btn:hover{{background:var(--primary-100);transform:translateY(-1px);box-shadow:0 4px 12px rgba(99,102,241,0.2);}}
+.action-btn.copied{{background:#dcfce7;border-color:#86efac;color:#166534;}}
+.toast{{position:fixed;top:20px;left:50%;transform:translateX(-50%) translateY(-100px);background:#1E293B;color:#fff;padding:10px 24px;border-radius:10px;font-size:13px;font-weight:600;z-index:9999;opacity:0;transition:all .3s ease;pointer-events:none;}}
+.toast.show{{transform:translateX(-50%) translateY(0);opacity:1;}}
+
 /* Tier SVG chart */
 .tier-chart-card{{padding:20px 24px;}}
 .tier-svg-wrap{{display:flex;align-items:flex-end;justify-content:center;gap:40px;padding:20px 0 0;position:relative;}}
@@ -420,22 +509,22 @@ canvas{{width:100%!important;}}
   {panels_html}
 </div>
 <div class="filter-popup" id="filterPopup"></div>
+<div class="toast" id="toast"></div>
 <script>
 const rowData={row_json};
 const volumeSeries={vol_j};
+const TIER_BOUNDS={tier_j};
 const COLORS=['#6366f1','#8b5cf6','#ec4899','#f59e0b','#10b981','#06b6d4','#f97316','#64748b','#3b82f6','#22c55e'];
 const TIER_COLORS=['#10b981','#3b82f6','#ec4899'];
 
-function computeTierBounds(mk){{
-  const prices=rowData.filter(r=>r.market===mk&&r.price).map(r=>r.price);
-  if(!prices.length)return[];
-  const mn=Math.min(...prices),mx=Math.max(...prices),step=(mx-mn)/3;
-  return[{{name:'Entry',lo:mn,hi:mn+step}},{{name:'Mid-tier',lo:mn+step,hi:mn+step*2}},{{name:'Premium',lo:mn+step*2,hi:mx+1}}];
-}}
+function computeTierBounds(mk){{return TIER_BOUNDS[mk]||[];}}
 function getPriceTier(price,mk){{
   if(!price)return null;
   const t=computeTierBounds(mk);
-  for(let i=0;i<t.length;i++)if(price>=t[i].lo&&(i===2||price<t[i].hi))return t[i].name;
+  for(let i=0;i<t.length;i++){{
+    if(i===t.length-1){{if(price>=t[i].lo)return t[i].name;}}
+    else{{if(price>=t[i].lo&&price<t[i].hi)return t[i].name;}}
+  }}
   return t.length?t[t.length-1].name:null;
 }}
 
@@ -555,6 +644,50 @@ function toggleAll(el){{popup.querySelectorAll('.fp-cb').forEach(cb=>cb.checked=
 function applyNum(){{const mn=parseFloat(document.getElementById('fMin').value),mx=parseFloat(document.getElementById('fMax').value);Array.from(fTable.querySelector('tbody').rows).forEach(r=>{{const v=parseFloat((r.cells[fCol]?.textContent||'').replace(/[^\\d.\\-]/g,''));let ok=true;if(!isNaN(mn)&&(isNaN(v)||v<mn))ok=false;if(!isNaN(mx)&&(isNaN(v)||v>mx))ok=false;r.style.display=ok?'':'none';}});popup.classList.remove('show');}}
 function applyTxt(){{const ck=new Set();popup.querySelectorAll('.fp-cb:checked').forEach(c=>ck.add(c.value));Array.from(fTable.querySelector('tbody').rows).forEach(r=>{{r.style.display=ck.has(r.cells[fCol]?.textContent.trim()||'')?'':'none';}});popup.classList.remove('show');}}
 function clearF(){{Array.from(fTable.querySelector('tbody').rows).forEach(r=>r.style.display='');popup.classList.remove('show');}}
+
+// === Copy ASINs ===
+function showToast(msg){{
+  const t=document.getElementById('toast');
+  t.textContent=msg;t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'),2000);
+}}
+function copyAsins(mk){{
+  const table=document.getElementById('table-'+mk);
+  if(!table)return;
+  const rows=Array.from(table.querySelector('tbody').querySelectorAll('tr'));
+  const asins=[];
+  rows.forEach(r=>{{
+    if(r.style.display==='none')return;
+    const link=r.cells[0]?.querySelector('a');
+    const asin=link?link.textContent.trim():(r.cells[0]?.textContent.trim()||'');
+    if(asin&&asin.length===10)asins.push(asin);
+  }});
+  if(!asins.length){{showToast('No ASINs to copy');return;}}
+  navigator.clipboard.writeText(asins.join(',')).then(()=>{{
+    showToast('Copied '+asins.length+' ASINs');
+  }}).catch(()=>showToast('Copy failed'));
+}}
+
+// === Export Excel ===
+function exportExcel(mk){{
+  const table=document.getElementById('table-'+mk);
+  if(!table)return;
+  const headers=Array.from(table.querySelectorAll('thead th')).map(th=>th.textContent.replace(/[\\u25B2\\u25BC\\u2195\\u25BC]/g,'').trim());
+  const rows=Array.from(table.querySelector('tbody').querySelectorAll('tr'));
+  let csv='\\uFEFF'+headers.join('\\t')+'\\n';
+  rows.forEach(r=>{{
+    if(r.style.display==='none')return;
+    const cells=Array.from(r.cells).map(td=>td.textContent.trim().replace(/\\t/g,' '));
+    csv+=cells.join('\\t')+'\\n';
+  }});
+  const blob=new Blob([csv],{{type:'application/vnd.ms-excel;charset=utf-8'}});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;a.download='ASIN_Detail_'+mk+'.xls';
+  document.body.appendChild(a);a.click();document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showToast('Exported '+mk+' table');
+}}
 </script>
 </body>
 </html>'''

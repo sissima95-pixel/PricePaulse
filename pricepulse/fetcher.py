@@ -224,9 +224,28 @@ _BRAND_LINE_SUFFIXES = {
 }
 # Words that are NEVER a brand (fallback shouldn't return these)
 _BRAND_BLOCKLIST = {
+    # Articles / generic
     "the", "new", "genuine", "original", "official", "premium",
     "brand", "no", "one", "1pack", "2pack", "3pack", "twin", "pack",
-    "amazon",  # "Amazon" alone is rarely the brand people care about
+    "amazon",
+    # Common descriptive words that appear as title-first-word
+    # but are NOT brand names — expanded 2026-09
+    "portable", "wireless", "mini", "smart", "solar", "outdoor",
+    "indoor", "electric", "digital", "automatic", "universal",
+    "rechargeable", "bluetooth", "waterproof", "adjustable",
+    "foldable", "handheld", "cordless", "stainless", "heavy",
+    "professional", "commercial", "industrial", "personal",
+    "upgraded", "improved", "enhanced", "advanced", "ultra",
+    "super", "extra", "large", "small", "big", "tiny", "slim",
+    "compact", "lightweight", "powerful", "quiet", "silent",
+    "fast", "quick", "rapid", "instant", "high", "low",
+    "dual", "triple", "double", "single", "multi",
+    "neck", "desk", "wall", "floor", "table", "car", "bed",
+    "baby", "pet", "dog", "cat", "kids", "child", "children",
+    "home", "kitchen", "bathroom", "garden", "office", "camping",
+    "travel", "sport", "sports", "gym", "yoga", "running",
+    "set", "kit", "pair", "pcs", "pieces",
+    "usb", "led", "lcd", "hd", "wifi", "gps",
 }
 
 
