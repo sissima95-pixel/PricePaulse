@@ -292,6 +292,7 @@ def _render_panel(mk, mrows, active, has_sr, has_pr, has_sv):
     if has_sv:
         vol_html = f'''<div class="section">
           <div class="section-title">\U0001f4ca Search Volume by ASIN (Top 15) <span class="vol-filter-label" id="vol-filter-{mk}"></span></div>
+          <div class="table-actions"><button class="action-btn" onclick="copyVolAsins('{mk}')" title="Copy ASINs">\U0001f4cb Copy ASINs</button></div>
           <div class="card"><div id="vol-chart-{mk}"></div></div>
         </div>'''
 
@@ -645,7 +646,16 @@ function applyNum(){{const mn=parseFloat(document.getElementById('fMin').value),
 function applyTxt(){{const ck=new Set();popup.querySelectorAll('.fp-cb:checked').forEach(c=>ck.add(c.value));Array.from(fTable.querySelector('tbody').rows).forEach(r=>{{r.style.display=ck.has(r.cells[fCol]?.textContent.trim()||'')?'':'none';}});popup.classList.remove('show');}}
 function clearF(){{Array.from(fTable.querySelector('tbody').rows).forEach(r=>r.style.display='');popup.classList.remove('show');}}
 
-// === Copy ASINs ===
+// === Copy Volume ASINs ===
+function copyVolAsins(mk){{
+  const container=document.getElementById('vol-chart-'+mk);
+  if(!container)return;
+  const asins=Array.from(container.querySelectorAll('.hbar-mono')).map(el=>el.textContent.trim()).filter(a=>a.length===10);
+  if(!asins.length){{showToast('No ASINs to copy');return;}}
+  navigator.clipboard.writeText(asins.join(',')).then(()=>showToast('Copied '+asins.length+' ASINs')).catch(()=>showToast('Copy failed'));
+}}
+
+// === Copy Table ASINs ===
 function showToast(msg){{
   const t=document.getElementById('toast');
   t.textContent=msg;t.classList.add('show');
