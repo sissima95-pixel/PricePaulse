@@ -287,6 +287,59 @@ def _render_panel(mk, mrows, active, has_sr, has_pr, has_sv):
         </div>'''
     brand_html += '</div>'
 
+    # --- Generate insights ---
+    # Price tier insight
+    tier_insight = ""
+    if bands and total_priced:
+        sorted_bands = sorted(bands, key=lambda x: -x[1])
+        dominant = sorted_bands[0]
+        dom_pct = dominant[1] / total_priced * 100
+        smallest = sorted_bands[-1]
+        sm_pct = smallest[1] / total_priced * 100
+
+        avg_price = sum(prices) / len(prices)
+        median_price = sorted(prices)[len(prices) // 2]
+
+        tier_insight = f'<div class="insight-box">'
+        tier_insight += f'<div class="insight-title">\U0001f4a1 Insight</div>'
+        tier_insight += f'<p>This category spans <b>${min(prices):.0f} \u2013 ${max(prices):.0f}</b> ({cur}), '
+        tier_insight += f'with a median of <b>${median_price:.0f}</b> and mean of <b>${avg_price:.0f}</b>. '
+        tier_insight += f'The <b>{dominant[0]}</b> tier dominates with <b>{dominant[1]}</b> ASINs ({dom_pct:.0f}%), '
+        tier_insight += f'while <b>{smallest[0]}</b> has the fewest at <b>{smallest[1]}</b> ({sm_pct:.0f}%).'
+
+        # Price concentration check
+        if dom_pct > 50:
+            tier_insight += f' The market is heavily concentrated in the {dominant[0]} segment \u2014 '
+            tier_insight += f'a potential opportunity exists in the {smallest[0]} tier with less competition.'
+
+        tier_insight += '</p>'
+        tier_insight += f'<div class="insight-note">\u2139\ufe0f Price tiers are split by tercile (33rd/67th percentile) '
+        tier_insight += f'to ensure balanced distribution across segments. Boundaries are rounded for readability.</div>'
+        tier_insight += '</div>'
+
+    # Distribution insight (brand)
+    dist_insight = ""
+    if brand_avg:
+        top_brand = brand_avg[0]
+        cheapest_brand = min(brand_avg, key=lambda x: x[1])
+        n_brands = len(brand_data)
+        top3_share = sum(c for _, _, c in brand_avg[:3]) / total_priced * 100 if total_priced else 0
+
+        dist_insight = f'<div class="insight-box">'
+        dist_insight += f'<div class="insight-title">\U0001f4a1 Insight</div>'
+        dist_insight += f'<p><b>{n_brands}</b> brands compete in this category. '
+        dist_insight += f'<b>{html_mod.escape(top_brand[0])}</b> has the highest average price at <b>${top_brand[1]:.0f}</b>, '
+        dist_insight += f'while <b>{html_mod.escape(cheapest_brand[0])}</b> is the most affordable at <b>${cheapest_brand[1]:.0f}</b>. '
+        dist_insight += f'Top 3 brands account for <b>{top3_share:.0f}%</b> of all priced ASINs.'
+
+        # Concentration check
+        if top3_share > 40:
+            dist_insight += f' The market shows moderate-to-high brand concentration.'
+        elif top3_share < 20:
+            dist_insight += f' The market is highly fragmented with no dominant player.'
+
+        dist_insight += '</p></div>'
+
     # Volume chart placeholder
     vol_html = ""
     if has_sv:
@@ -304,6 +357,7 @@ def _render_panel(mk, mrows, active, has_sr, has_pr, has_sv):
       <div class="section">
         <div class="section-title">\U0001f3c6 Price Tier Overview</div>
         <div class="tier-row">{tier_cards}</div>
+        {tier_insight}
       </div>
       <div class="section">
         <div class="section-title">\U0001f4c8 Distribution</div>
@@ -311,6 +365,7 @@ def _render_panel(mk, mrows, active, has_sr, has_pr, has_sv):
           <div class="card tier-chart-card"><div class="card-title">\U0001f4ca ASIN Count by Price Tier</div><div id="tier-svg-{mk}" class="tier-svg-wrap"></div></div>
           {brand_html}
         </div>
+        {dist_insight}
       </div>
       <div class="section">
         <div class="section-title">\U0001f3af Brand Overview</div>
@@ -470,6 +525,13 @@ tbody tr:hover td{{background:var(--primary-50);}}
 .fp-clear{{background:var(--neutral-100);color:var(--neutral-600);}}
 .fp-clear:hover{{background:var(--neutral-200);}}
 .fp-selectall{{font-weight:700;padding-bottom:4px;border-bottom:1px solid var(--neutral-100);margin-bottom:4px;}}
+/* Insight box */
+.insight-box{{background:var(--primary-50);border:1px solid #c7d2fe;border-radius:var(--radius-lg);padding:16px 20px;margin-top:16px;}}
+.insight-title{{font-size:13px;font-weight:700;color:var(--primary-700);margin-bottom:8px;}}
+.insight-box p{{font-size:12.5px;color:var(--neutral-700);line-height:1.65;}}
+.insight-box b{{color:var(--neutral-900);}}
+.insight-note{{font-size:11px;color:var(--neutral-500);margin-top:10px;font-style:italic;padding-top:8px;border-top:1px solid #c7d2fe;}}
+
 canvas{{width:100%!important;}}
 
 /* Action buttons */

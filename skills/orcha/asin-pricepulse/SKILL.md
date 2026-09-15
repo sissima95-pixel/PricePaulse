@@ -8,12 +8,18 @@ version: 1.3
 
 > 批量抓取 Amazon 17 个站点的 ASIN 本地原生价格,生成交互报告。
 
+## Aliases
+
+Users may refer to this tool as any of: **PricePulse**, **pricepulse**, **PP**, **pp**
+
+When user says "用 pp 帮我..." or "请 pp 处理..." → activate this skill.
+
 ## When to activate
 
 - Batch ASIN price lookup across Amazon marketplaces
 - Cross-market pricing comparison
 - Competitive category pricing / brand price analysis
-- Any request mentioning "竞品价格" / "ASIN 价格" / "价格对比"
+- Any request mentioning "竞品价格" / "ASIN 价格" / "价格对比" / "PP" / "pp"
 
 ## Pre-flight reminder (ALWAYS show before running)
 
