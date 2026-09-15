@@ -385,6 +385,9 @@ def _render_panel(mk, mrows, active, has_sr, has_pr, has_sv):
     # end for each tier
 
     # --- INSIGHTS (professional format: EN + CN italic) ---
+    avg_price = sum(prices) / len(prices) if prices else 0
+    median_price = sorted(prices)[len(prices) // 2] if prices else 0
+
     # A. PRICE OVERVIEW
     tier_insight = ""
     if bands and total_priced:
@@ -393,8 +396,6 @@ def _render_panel(mk, mrows, active, has_sr, has_pr, has_sv):
         dom_pct = dominant[1] / total_priced * 100
         smallest = sorted_bands[-1]
         sm_pct = smallest[1] / total_priced * 100
-        avg_price = sum(prices) / len(prices)
-        median_price = sorted(prices)[len(prices) // 2]
 
         tier_insight = '<div class="insight-box">'
         tier_insight += '<div class="insight-title">A. PRICE OVERVIEW / \u4ef7\u683c\u6982\u89c8</div>'
@@ -451,13 +452,62 @@ def _render_panel(mk, mrows, active, has_sr, has_pr, has_sv):
         dist_insight += f'{html_mod.escape(top_brand[0])}\u4ee5{top_brand[2]}\u4e2aASIN\u9886\u5148\uff0c'
         dist_insight += f'\u5747\u4ef7${top_brand[1]:.0f}\u3002'
         dist_insight += f'\u6700\u4f4e\u4ef7\u54c1\u724c:{html_mod.escape(cheapest_brand[0])}\uff0c\u5747\u4ef7${cheapest_brand[1]:.0f}\u3002'
-        dist_insight += '</p></div>'
+        dist_insight += '</p>'
 
-    # --- Volume chart placeholder ---
+        # C. INDIVIDUAL PLAYER ANALYSIS — top 3 known brands, one paragraph each
+        total_sv = sum(brand_sv.values()) or 0
+        tier_names = [b[0] for b in bands]
+        dist_insight += '<div class="insight-title" style="margin-top:14px">C. INDIVIDUAL PLAYER ANALYSIS / \u7ade\u4e89\u8005\u52a8\u6001</div>'
+        for bname, avg_p, cnt in top3:
+            b_rows = [r for r in ok_rows if (r.get("brand", "").strip() or "Unknown") == bname]
+            b_prices = [r["price"] for r in b_rows]
+            b_min, b_max = min(b_prices), max(b_prices)
+            asin_share = cnt / total_priced * 100 if total_priced else 0
+            # tier footprint
+            tier_cnt = {t: 0 for t in tier_names}
+            for r in b_rows:
+                tier_cnt[_get_tier(r["price"])] += 1
+            present = [t for t in tier_names if tier_cnt[t] > 0]
+            home_tier = max(tier_cnt.items(), key=lambda x: x[1])[0]
+            home_pct = tier_cnt[home_tier] / cnt * 100 if cnt else 0
+            # search volume share
+            sv_share = brand_sv.get(bname, 0) / total_sv * 100 if total_sv else None
+            # avg search rank
+            sr_vals = [r["search_rank"] for r in b_rows if r.get("search_rank") is not None]
+            avg_sr = sum(sr_vals) / len(sr_vals) if sr_vals else None
+            # top ASIN by search volume
+            top_asin = max(b_rows, key=lambda r: r.get("search_volume") or 0).get("asin", "") if has_sv else ""
+
+            # Positioning label (relative to category median)
+            pos_en, pos_cn = ("premium-positioned", "\u9ad8\u4f4d\u5b9a\u4ef7") if avg_p > median_price * 1.3 \
+                else ("value-positioned", "\u4f4e\u4f4d\u5b9a\u4ef7") if avg_p < median_price * 0.8 \
+                else ("mainstream-priced", "\u4e3b\u6d41\u5b9a\u4ef7")
+            cover_en = "full-tier coverage" if len(present) == len(tier_names) else \
+                       f"concentrated in {home_tier} ({home_pct:.0f}% of its ASINs)"
+            cover_cn = "\u5168\u4ef7\u683c\u5e26\u8986\u76d6" if len(present) == len(tier_names) else \
+                       f"\u96c6\u4e2d\u4e8e{home_tier}\u6bb5({home_pct:.0f}%)"
+            sv_en = f" Captures <b>{sv_share:.0f}%</b> of category search volume" if sv_share is not None else ""
+            sv_en += (" \u2014 " + ("over-indexing" if sv_share > asin_share * 1.3 else "under-indexing" if sv_share < asin_share * 0.7 else "in line with") + " its ASIN share." if sv_share is not None else "")
+            sv_cn = f"\u5360\u7c7b\u76ee\u641c\u7d22\u91cf{sv_share:.0f}%\uff0c" + ("\u641c\u7d22\u6548\u7387\u9ad8\u4e8e\u94fa\u8d27\u5360\u6bd4" if sv_share > asin_share * 1.3 else "\u641c\u7d22\u6548\u7387\u4f4e\u4e8e\u94fa\u8d27\u5360\u6bd4" if sv_share < asin_share * 0.7 else "\u641c\u7d22\u4e0e\u94fa\u8d27\u5360\u6bd4\u5339\u914d") + "\u3002" if sv_share is not None else ""
+            sr_en = f" Avg search rank <b>#{avg_sr:.0f}</b>." if avg_sr is not None else ""
+            sr_cn = f"\u5e73\u5747\u641c\u7d22\u6392\u540d#{avg_sr:.0f}\u3002" if avg_sr is not None else ""
+            ta_en = f" Lead ASIN: <span class=\"mono\">{html_mod.escape(top_asin)}</span>." if top_asin else ""
+
+            bn = html_mod.escape(bname)
+            dist_insight += (f'<p><i>{bn.upper()}:</i> <b>{cnt}</b> ASINs ({asin_share:.0f}% of category), '
+                             f'{pos_en} at avg <b>${avg_p:.0f}</b> (range ${b_min:.0f}\u2013${b_max:.0f}), {cover_en}.'
+                             f'{sv_en}{sr_en}{ta_en}</p>')
+            dist_insight += (f'<p class="cn">{bn}: {cnt}\u4e2aASIN(\u5360\u7c7b\u76ee{asin_share:.0f}%)\uff0c'
+                             f'{pos_cn}\uff0c\u5747\u4ef7${avg_p:.0f}(\u533a\u95f4${b_min:.0f}\u2013${b_max:.0f})\uff0c{cover_cn}\u3002'
+                             f'{sv_cn}{sr_cn}</p>')
+        dist_insight += '</div>'
+
+    # --- Volume chart + brand bubble cloud (interactive pair) ---
     vol_html = ""
     if has_sv:
         vol_html = f'''<div class="section">
           <div class="section-title">5. Search Volume by ASIN (Top 15) <span class="vol-filter-label" id="vol-filter-{mk}"></span></div>
+          <div class="card" style="margin-bottom:14px"><div class="card-title">CLICK A BRAND TO FILTER</div><div class="bubble-cloud" id="bubble-{mk}"></div></div>
           <div class="table-actions"><button class="action-btn" onclick="copyVolAsins('{mk}')" title="Copy ASINs">Copy ASINs</button></div>
           <div class="card"><div id="vol-chart-{mk}"></div></div>
         </div>'''
@@ -484,7 +534,6 @@ def _render_panel(mk, mrows, active, has_sr, has_pr, has_sv):
         <div class="grid-2">
           {donut_html}
         </div>
-        <div class="card"><div class="bubble-cloud" id="bubble-{mk}"></div></div>
         {dist_insight}
       </div>
       <div class="section">
@@ -649,7 +698,9 @@ tbody tr:hover td{{background:var(--primary-50);}}
 .insight-box{{background:#f8fafc;border:1px solid var(--neutral-200);border-radius:var(--radius-lg);padding:18px 22px;margin-top:18px;}}
 .insight-title{{font-size:13px;font-weight:700;color:var(--neutral-800);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--neutral-200);}}
 .insight-box p{{font-size:12.5px;color:var(--neutral-700);line-height:1.7;margin-bottom:10px;}}
-.insight-box p.cn{{font-style:italic;color:var(--neutral-500);font-size:12px;margin-bottom:8px;}}
+.insight-box p.cn{{font-style:italic;color:var(--neutral-500);font-size:12px;margin-bottom:14px;}}
+.insight-box p i{{font-style:italic;font-weight:600;color:var(--neutral-800);}}
+.insight-box .mono{{font-family:'SF Mono',Monaco,Consolas,monospace;font-size:11.5px;color:var(--primary-700);}}
 .insight-box b{{color:var(--neutral-900);}}
 .insight-note{{font-size:11px;color:var(--neutral-400);margin-top:10px;font-style:italic;padding-top:8px;border-top:1px solid var(--neutral-200);}}
 

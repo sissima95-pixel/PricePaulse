@@ -83,7 +83,7 @@ pricepulse --markets US --input data.xlsx --title "US Personal Fans" --subtitle 
 - `asin_detail_YYYYMMDD_HHMMSS.xlsx` — 格式化 Excel 明细(Segoe UI 字体、Indigo 表头、交替行色、冻结首行)
 - `竞品ASIN分析报告_YYYYMMDD_HHMMSS.html` — 可交互报告
 
-### HTML 报告包含
+### HTML 报告包含(v1.4)
 
 1. **Hero Header** — Indigo→Violet→Pink 渐变,标题居中
 2. **Price Tier Cards** — 3 张卡片(Entry/Mid-tier/Premium),显示数量、占比、均价,**可点击过滤 Volume 图**
@@ -206,6 +206,8 @@ pricepulse [OPTIONS]
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| 1.4.0 | 2026-09-16 | 品牌份额环形图(by Search Volume / by ASIN Count);Brand Share by Price Tier(每档 Top 5,彩色圆点表格,可展开 ASIN 明细子表);Insight 改为专业格式 A/B/C 三段(英文 + 中文斜体,无 emoji),C 段逐个分析 Top 3 品牌;品牌气泡云移至 Search Volume 区块;Copy ASINs / Export Excel 按钮;品牌识别新增 po-brand + Brand Name 表格模式(最高优先级),Store URL 降级,自动重试空品牌;Unknown 统一排最后;价格段改为分位数(tercile)智能分档,Python/JS 边界同步;别名 PP |
+| 1.3.0 | 2026-08-11 | PriceLens 改名 PricePulse(包名 / CLI / skill 全部更新) |
 | 1.2.2 | 2026-08-11 | 品牌识别改为 byline-first;新设计系统(Indigo 色板、Inter 字体、Hero 渐变);HTML 柱形图(不再用模糊 canvas);品牌气泡云;交互过滤(点击价格段/品牌→Volume 图动态更新);Search Volume 改为 Top 15;去除 x 轴数字 |
 | 1.1.1 | 2026-08-07 | UI 对齐 AU RV Dashboard 风格;输出改为 Excel(.xlsx);文件名改为 `asin_detail` + `竞品ASIN分析报告`;等宽 3 档价格段;标题居中;筛选加 Select All;明细表可滚动 |
 | 1.1.0 | 2026-08-05 | reporter.py 完整重写(替换损坏文件);新增 `--subtitle` 参数;HTML 骨架修复 |

@@ -3,6 +3,6 @@
 AST-internal tool. Uses public Amazon frontends with delivery-address + currency
 cookie injection. No internal APIs, no scraping-service dependencies.
 
-Version: 1.3.0
+Version: 1.4.0
 """
-__version__ = "1.3.0"
+__version__ = "1.4.0"
